@@ -16,7 +16,6 @@ class scAnalysis():
         gtf
         scdir 
 
-
     '''
     def __init__(
         self,
@@ -45,13 +44,13 @@ class scAnalysis():
         if not sample_names:
             self.sample_names = self.samplesheet[sample_name_col].tolist()
         else:
-            self.sample_names = sample_names
             inds = self.samplesheet[sample_name_col].isin(sample_names)
             self.samplesheet = self.samplesheet[inds].reset_index(drop=True)
-        
+            self.sample_names = self.samplesheet[sample_name_col].tolist()
         self.gtf = gtf
         self.whole = whole
         self.alignments = self.samplesheet[gex_col].tolist()
+        self.vdj_alignments = self.samplesheet[vdj_col].tolist()
 
         # import metadata
         if not metadata_cols:
@@ -124,7 +123,7 @@ class scAnalysis():
     def add_metadata_to_adata(self, adata):
         for col in self.metadata_cols:
             mapping = self.samplesheet[col].to_dict()
-            adata.obs[col] = adata.obs['batch_indices'].map(mapping)
+            adata.obs[col] = adata.obs['batch_indices'].astype(int).map(mapping)
         return adata
         
     def write_filtered(self, 
@@ -178,6 +177,20 @@ class scAnalysis():
         self.batch_correct()
         self.write_scvi_scaled()
         return
+    
+    def map_obs(self, reduction, mapping, old_key, new_key, palette=None):
+        reduction.adata.obs[new_key] = reduction.adata.obs[old_key].apply(
+            lambda x:mapping[x]).astype('category')
+        if palette:
+            colors = [palette[x] for x in reduction.adata.obs[new_key].cat.categories]
+            reduction.adata.uns[new_key+'_colors'] = colors
+        return 
+
+    def plot_metadata(self, reduction):
+        # plot metadata reps
+        for obs in self.metadata:
+            reduction.plot_obs(obs)
+        return 
 
 #### Initialize dimension reduction object ####
 
@@ -186,22 +199,11 @@ class scAnalysis():
         reduction = scReduction(self.outdir, **kwargs)
         return reduction
 
-    # def reduction(self, pca_s=1.0, min_n_pcs=5, n_neighbors=20,  n_jobs=None, scaled=None,\
-    #     subset_name=None, subset_cond=dict(), run_reduction=False, regress=False, \
-    #     regress_vars={'latent':['percent_mito'],  'corrected':['percent_mito']}, \
-    #     plot_clustering_metrics=False, default_rep='pcs', plot_umap=False):
-    #     if scaled is None:
-    #         scaled = self.scaled
-    #     reduced = scVIReduction(self.outdir, self.filtered, scaled, \
-    #         pca_s=pca_s, n_neighbors=n_neighbors, n_jobs=n_jobs, \
-    #         subset_name=subset_name, subset_cond=subset_cond, plot_umap=plot_umap)
-    #     if run_reduction:
-    #         reduced.run_all(regress=regress, regress_vars=regress_vars, 
-    #             min_n_pcs=min_n_pcs, default_rep=default_rep)
-    #         reduced.save()
-    #     if plot_clustering_metrics:
-    #         reduced.plot_clustering_metrics()
-    #     return reduced
+    def run_reduction(self, reduction):
+        reduction.run_all()
+        reduction.save()
+        reduction.plot_clustering_metrics()
+        return reduction
 
 #### Quality control scoring ####
 
@@ -216,29 +218,67 @@ class scAnalysis():
         from scimmunity.qc import score_doublet_per_sample
         out = reduction.out.replace('reduction', 'doublet')
         mkdir(out)
-        score_doublet_per_sample(reduction.adata, sample_key, thresh_list=thresh_list, out=out)
+        score_doublet_per_sample(reduction.adata, sample_key, 
+            thresh_list=thresh_list, out=out)
         return 
     
     def call_doublet(self, reduction, sample_key='sample_name', thresh_list=[]):
         from scimmunity.qc import call_doublet_per_sample
         out = reduction.out.replace('reduction', 'doublet')
         mkdir(out)
-        call_doublet_per_sample(reduction.adata, sample_key, thresh_list=thresh_list, out=out)
+        call_doublet_per_sample(reduction.adata, sample_key, 
+            thresh_list=thresh_list, out=out)
         return 
+
+    def plot_qc(self, reduction):
+        metrics = ['phase', 'housekeeping', 'heatshock_score',
+            'percent_mito', 'n_counts']
+        for metric in metrics:
+            reduction.plot_obs(metric)
+        return
 
 #### T cell receptor analysis ####
 
-    def tcr(self, reduction, key='sample_name', count_thresh=10, freq_thresh=0.10):
-        mappings = tcr.tcr_mapping(self.sample_names, self.vdj_sample_ids, self.vdj_aligndirs, self.irbs)
-        tcr.map_adata_tcr(reduction.adata, *mappings)
+    def add_tcr(self, reduction, 
+        key='sample_name', count_thresh=10, freq_thresh=0.10):
+
+        import scimmunity.tcr as tcr
+
+        tcr.load_tcr(reduction.adata, self.sample_names, self.vdj_alignments)
         tcr.tcr_detection(reduction.adata)
         
         for feature in ['TRB', 'clonotype']:
-            tcr.tcr_size_per_sample(reduction.adata, feature, key=key, log=False, normalize=False)
-            tcr.tcr_size_per_sample(reduction.adata, feature, key=key, log=False, normalize=True)
-            tcr.tcr_size_per_sample(reduction.adata, feature, key=key, log=True, normalize=False)
+            tcr.tcr_size_per_sample(reduction.adata, feature, 
+                key=key, log=False, normalize=False)
+            tcr.tcr_size_per_sample(reduction.adata, feature, 
+                key=key, log=False, normalize=True)
+            tcr.tcr_size_per_sample(reduction.adata, feature, 
+                key=key, log=True, normalize=False)
 
-            key = tcr.expanded_tcr(reduction.adata, feature, thresh=count_thresh, normalize=False)
-            key = tcr.expanded_tcr(reduction.adata, feature, thresh=freq_thresh, normalize=True)
-
+            key = tcr.expanded_tcr(reduction.adata, feature, 
+                thresh=count_thresh, normalize=False)
+            key = tcr.expanded_tcr(reduction.adata, feature, 
+                thresh=freq_thresh, normalize=True)
         return 
+    
+    def plot_tcr(self, reduction, count_thresh=10, freq_thresh=0.10, 
+        count_vmin=-20, freq_vmin=-0.02, log_vmin=-2):
+        reduction.plot_obs('TCR detection', folder='tcr')
+        # for rep in reduction.all_reps:
+        #     out = reduction.out.replace('reduction', 'tcr')+rep+'/'
+        #     mkdir(out)
+        #     plot_bool(reduction.adata, 'TCR detection', rep, ['TCR'], \
+        #         save_name='_TCR_detection', out=out) 
+
+        for feature in ['TRB', 'clonotype']:
+            reduction.plot_obs('{} size'.format(feature), folder='tcr', 
+                color_map='Greens', vmin=count_vmin)
+            reduction.plot_obs('{} frequency'.format(feature), folder='tcr', 
+                color_map='Greens', vmin=freq_vmin)
+            reduction.plot_obs('log {} size'.format(feature), folder='tcr', 
+                color_map='Greens', vmin=log_vmin)
+            reduction.plot_obs('Expanded {} ({}+)'.format(feature, count_thresh), \
+                save_name='expanded_{}_count'.format(feature), folder='tcr')
+            reduction.plot_obs('Expanded {} (f≥{})'.format(feature, freq_thresh), \
+                save_name='expanded_{}_frequency'.format(feature), folder='tcr')
+        return

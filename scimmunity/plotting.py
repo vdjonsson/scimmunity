@@ -23,7 +23,8 @@ def plot_reps(adata, color, save_name=None, outdir='./',
     if save_name is None:
         save_name=color
     # Clean up save_name
-    save_name = save_name.replace(' ', '_').replace('/', '_')
+    save_name = clean_up_str(save_name)
+    # save_name.replace(' ', '_').replace('/', '_')
     if layer is not None:
         save_name += '_'+layer
     for rep in reps:
@@ -35,6 +36,33 @@ def plot_reps(adata, color, save_name=None, outdir='./',
     sc.settings.figdir = temp
     rcParams['figure.figsize'] = figsize_temp
     return 
+
+def plot_bool(adata, key, basis, groups, order=True, save_name=None, title=None, out='./'):
+    temp = sc.settings.figdir
+    sc.settings.figdir = out
+
+    if save_name is None:
+        save_name=key
+
+    ax = plot_scatter(adata, basis=basis, color=None, show=False)
+    markersize = ax.collections[0]._sizes[0]
+    if order:
+        for i, group in enumerate(groups):
+            if i!=(len(groups)-1):
+                inds = adata.obs[key]==group
+                ax = plot_scatter(adata[inds], basis=basis, color=key, \
+                    ax=ax, size=markersize, title=title, show=False)
+            else:
+                inds = adata.obs[key]==group
+                ax = plot_scatter(adata[inds], basis=basis, color=key, \
+                    ax=ax, size=markersize, save='_'+save_name, title=title)
+    else:
+        inds = adata.obs[key].isin(groups)
+        ax = plot_scatter(adata[inds], basis=basis, color=key, \
+            ax=ax, size=markersize, save='_'+save_name, title=title)
+    sc.settings.figdir = temp
+    plt.close()
+    return
 
 def plot_density(adata, key, reps, components='1,2', outdir='./', size=20):
     temp = sc.settings.figdir

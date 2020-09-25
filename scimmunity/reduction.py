@@ -1,6 +1,6 @@
 import os
 import matplotlib.pyplot as plt
-
+import numpy as np
 import scanpy as sc
 
 from kneed import KneeLocator
@@ -15,12 +15,19 @@ class scReduction():
         parent_name='Whole', parent_h5ad='corrected.h5ad',
         subset_name='Whole', subset_h5ad='corrected.h5ad', subset_cond=dict(), 
         subfolder='reduction',
-        pca_s=1.0, n_neighbors=30, n_jobs=None, 
+        pca_s=1.0, min_n_pcs=5, n_neighbors=20, n_jobs=None, 
         verify_barcodes=False, 
         neighbors_reps=['pcs', 'latent', 'latent_regressed'],
         default_rep='pcs',
         reductions=['pca', 'umap', 'tsne', 'diffmap'], 
-        res_list=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]):
+        res_list=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2],
+        regress=False, 
+        regress_vars={
+            'latent':['percent_mito'], 
+            'normalized':['n_counts', 'percent_mito', 'S_score', 'G2M_score'],
+            'corrected':['percent_mito']
+            }
+        ):
     
         """
         pcs_s (float): sensitivity for knee detection in determing number of PCs
@@ -58,13 +65,17 @@ class scReduction():
         else:
             # load existing subset adata
             self.adata = sc.read(self.subset)
+            if verify_barcodes:
             # verify that the subset conditions give the same barcodes
-            self.verify_barcodes()
+                self.verify_barcodes()
 
         # Parameters for dimension reduction     
         self.pca_s = pca_s
+        self.min_n_pcs = min_n_pcs
         self.n_neighbors = n_neighbors
         self.n_jobs = n_jobs
+        self.regress = regress
+        self.regress_vars = regress_vars
         
         # define representations used for constructing neighborhood graph
         self.neighbors_reps = neighbors_reps
@@ -78,7 +89,9 @@ class scReduction():
         self.res_list = res_list
 
         return
-    
+    def update_params(self,**kwargs):
+        self.__dict__.update(**kwargs)
+        return
     def get_subset_inds(self, adata_parent):
         """
         Generate boolean mask based on subset conditions applied to parent adata.
@@ -134,14 +147,14 @@ class scReduction():
 
     ### Dimension reduction ###
 
-    def run_pca(self, min_n_pcs=5, n_comps=50):
+    def run_pca(self, n_comps=50):
         mkdir(os.path.join(self.out,'pca'))
         sc.settings.figdir = os.path.join(self.out,'pca')
         sc.tl.pca(self.adata, n_comps=n_comps, svd_solver='auto', use_highly_variable=False)
         # arpack can give zero variance explained, so we use auto solver
         sc.settings.figdir = self.out
         sc.pl.pca_variance_ratio(self.adata, log=False, save=True)
-        self.set_n_pcs(min_n_pcs=min_n_pcs) 
+        self.set_n_pcs(min_n_pcs=self.min_n_pcs) 
     
     def set_n_pcs(self, min_n_pcs=5):
         # knee detection
@@ -228,20 +241,21 @@ class scReduction():
                 sc.tl.leiden(self.adata, resolution=res, key_added=name)
         return 
     
-    def run_all(self, regress=True, min_n_pcs=5,
-        regress_vars={
-            'latent':['percent_mito'], 
-            'normalized':['n_counts', 'percent_mito', 'S_score', 'G2M_score'],
-            'corrected':['percent_mito']}):
+    def run_all(self):
         self.adata.X = self.adata.layers['normalized']
-        if regress:
-            self.regress_rep('latent', regress_vars['latent'], n_jobs=self.n_jobs)
-            for layer in ['normalized', 'corrected']:
-                self.regress_layer(layer, regress_vars[layer], n_jobs=self.n_jobs)
-                self.regress_layer(layer, regress_vars[layer], n_jobs=self.n_jobs)
+        if self.regress:
+            for key in self.regress_vars:
+                if 'X_' + key in self.adata.obsm:
+                    self.regress_rep(key, regress_vars[key], n_jobs=self.n_jobs)
+                if key in self.adata.layers:
+                    self.regress_layer(key, regress_vars[key], n_jobs=self.n_jobs)
+            # self.regress_rep('latent', regress_vars['latent'], n_jobs=self.n_jobs)
+            # for layer in ['normalized', 'corrected']:
+            #     self.regress_layer(layer, regress_vars[layer], n_jobs=self.n_jobs)
+            #     self.regress_layer(layer, regress_vars[layer], n_jobs=self.n_jobs)
         if 'normalized_regressed' in self.adata.layers:
             self.adata.X = self.adata.layers['normalized_regressed']
-        self.run_pca(min_n_pcs=min_n_pcs)
+        self.run_pca()
         self.run_neighbors(method='gauss')
         self.run_neighbors(method='umap')
         self.run_diffmap()
@@ -251,6 +265,11 @@ class scReduction():
         self.plot_clustering()
         return 
 
+    def run_and_save(self):
+        self.run_all()
+        self.save()
+        self.plot_clustering_metrics()
+        return 
     ### Plotting ####
     
     def plot_clustering(self, subfolder=None):
@@ -281,3 +300,12 @@ class scReduction():
             plot_silhouette_coeff(self.adata, self.res_list, X=rep, 
                 prefix=self.prefix, rep=rep, out=out)
         return
+
+    def plot_obs(self, obs, reps=None, folder='reduction', **kwargs):
+        out = os.path.join(self.outdir, self.subset_name, folder)
+        if reps is None:
+            reps=self.all_reps
+        plot_reps(self.adata, obs, outdir=out, reps=reps, **kwargs)
+        return
+    
+    

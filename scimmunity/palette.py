@@ -41,6 +41,10 @@ plt.register_cmap(cmap=cmap)
 gene_cmap = "GrYlOrRd"
 gene_heatmap = 'RdBu_r'
 
+# TCR
+detection = ['#66c2a5','lightgray']
+expanded = sns.color_palette('Greens', n_colors=2)
+
 # compartment
 csf = sns.color_palette('Purples', n_colors=3)[-1]
 blood = sns.color_palette('Reds', n_colors=3)[-1]
