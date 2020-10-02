@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 import pkg_resources
@@ -88,12 +89,12 @@ def doublet(adata, sample='', layer='raw', thresh=None, out='./'):
                                                           min_gene_variability_pctl=85, 
                                                           n_prin_comps=30)
     scrub.plot_histogram()
-    plt.savefig('{}{}doublet_auto_cutoff.png'.format(out, sample))
+    plt.savefig(os.path.join(out, f"{sample}_doublet_auto_cutoff.png"))
     plt.close()
     if thresh is not None:
         scrub.call_doublets(threshold=thresh)
         scrub.plot_histogram()
-        plt.savefig('{}{}_doublet_{}_cutoff.png'.format(out, sample, thresh))
+        plt.savefig(os.path.join(out, f"{sample}_doublet_{thresh}_cutoff.png"))
         plt.close()
     # add doublet information to adata
     adata.obs['doublet'] = scrub.predicted_doublets_
@@ -139,5 +140,5 @@ def plot_doublet_histogram(adata, sample, thresh, out='./', scale_hist_obs='log'
     ax.set_ylabel('Prob. density')
 
     fig.tight_layout()
-    plt.savefig('{}{}_doublet_{}_cutoff.png'.format(out, sample, thresh))
+    plt.savefig(os.path.join(out, f"{sample}_doublet_{thresh}_cutoff.png"))
     return 

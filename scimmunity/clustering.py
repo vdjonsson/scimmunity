@@ -1,5 +1,7 @@
 import os
+import logging
 import numpy as np
+import matplotlib.pyplot as plt
 
 # calinski_harabasz_score for sklearn version higher than v0.19
 from sklearn.metrics import calinski_harabaz_score 

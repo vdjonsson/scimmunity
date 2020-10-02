@@ -3,7 +3,7 @@ import numpy as np
 import scanpy as sc
 import pandas as pd
 
-from scimmunity.utils import mkdir
+from scimmunity.utils import mkdir, clean_up_str
 from scimmunity.plotting import set_plotting_params
 
 class scAnalysis():
@@ -188,7 +188,7 @@ class scAnalysis():
 
     def plot_metadata(self, reduction):
         # plot metadata reps
-        for obs in self.metadata:
+        for obs in self.metadata_cols:
             reduction.plot_obs(obs)
         return 
 
@@ -263,12 +263,7 @@ class scAnalysis():
     
     def plot_tcr(self, reduction, count_thresh=10, freq_thresh=0.10, 
         count_vmin=-20, freq_vmin=-0.02, log_vmin=-2):
-        reduction.plot_obs('TCR detection', folder='tcr')
-        # for rep in reduction.all_reps:
-        #     out = reduction.out.replace('reduction', 'tcr')+rep+'/'
-        #     mkdir(out)
-        #     plot_bool(reduction.adata, 'TCR detection', rep, ['TCR'], \
-        #         save_name='_TCR_detection', out=out) 
+        reduction.plot_bool('TCR detection', ['TCR'], folder='tcr')
 
         for feature in ['TRB', 'clonotype']:
             reduction.plot_obs('{} size'.format(feature), folder='tcr', 
@@ -282,3 +277,133 @@ class scAnalysis():
             reduction.plot_obs('Expanded {} (f≥{})'.format(feature, freq_thresh), \
                 save_name='expanded_{}_frequency'.format(feature), folder='tcr')
         return
+
+### Differential Expression ###
+    def de(self, reduction, clustering, 
+        methods=['t-test', 'wilcoxon'],
+        **kwargs):
+        """
+        Perform differential expression analysis
+        Args:
+            reduction: scimmunity.reduction.scReduction
+            clustering (str or List of str): Keys for annotation of observations
+            n_genes: Number of genes to store statistics for in the adata 
+            methods: List of methods to use for differential expression 
+                {'logreg', 't-test', 'wilcoxon', 't-test_overestim_var'}
+        Returns:
+
+        """
+        from scimmunity.de import de_layer
+        outdir = reduction.out.replace('reduction', 'de')
+
+        if type(clustering) == str:
+            clusterings = [clustering]
+        elif type(clustering) == list:
+            clusterings = clustering
+
+        for clustering in clusterings:
+            for method in methods:
+                de_layer(reduction.adata, clustering, 
+                    method=method, 
+                    outdir=outdir, 
+                    **kwargs)
+        return 
+
+### Annotation ###
+    def annotate_pop(self, reduction, clustering, population, 
+        plot_reps=False, try_all=True, reps=None,
+        plot_reps_dpi=300, figsize=(3,3), **kwargs):
+        from scimmunity.annotation import clusterAnnotation
+        outdir = reduction.out.replace('reduction', 'annotation')
+        annotation = clusterAnnotation(reduction.adata, outdir, clustering, 
+            reps=reps, **kwargs)
+        annotation.try_annotation(population, plot_reps=plot_reps, 
+            try_all=try_all, figsize=figsize, plot_reps_dpi=plot_reps_dpi)
+        annotation.set_annotation(population, annotation.pop2phenotype)
+        return annotation.adata
+
+    def set_annotation(self, reduction, clustering, population, pop2phenotype, 
+        markersets=None):
+        from scimmunity.annotation import clusterAnnotation
+        outdir = reduction.out.replace('reduction', 'annotation')
+        annotation = clusterAnnotation(reduction.adata, outdir, clustering)
+        annotation.set_annotation(population, pop2phenotype, markersets=markersets)
+        return annotation.adata
+
+    def run_annotation(self, reduction, clustering, population,
+        plot_reps=True, try_all=True, reps=None, 
+        plot_reps_dpi=300, figsize=(3,3), **kwargs):
+        reduction.adata = self.annotate_pop(reduction, clustering, population, 
+            plot_reps=plot_reps, try_all=try_all, 
+            reps=reps, plot_reps_dpi=plot_reps_dpi, figsize=figsize, **kwargs)
+        reduction.plot_obs('Phenotype')
+        return 
+
+    def annotate_comp(self, reduction, rep, prefix='', dims=[0,1], offset=1, 
+        layer=None, thresh=0.8, markersets=[], 
+        gsets=['GO_Biological_Process_2018', 'KEGG_2019_Human', 'WikiPathways_2019_Human']):
+        from scvi_analysis.component import corr_rep_gene_dict, corr_rep_gene
+        out = os.path.join(reduction.out.replace('reduction', 'annotation'), rep)
+        mkdir(out)
+        corr_rep_gene(reduction.adata, rep, prefix=prefix, dims=dims, 
+            offset=offset, layer=layer, thresh=thresh, gsets=gsets, out=out)
+        for markerset in markersets:
+            corr_rep_gene_dict(reduction.adata, markerset, rep, prefix=prefix, 
+                dims=dims, offset=offset, layer=layer, out=out)
+        return 
+
+### Frequency Plot ###
+
+    def plot_frequency(self, reduction, x, y, 
+        xrot=0, yrot=45, xorder=None, yorder=None, sort_x=False, sort_y=False, 
+        explode=[], swap_axes=True, dropna=False, **kwargs):
+        import scimmunity.frequency as freq
+        subfolder = f"{clean_up_str(x)}_{clean_up_str(y)}"
+        out = os.path.join(reduction.out.replace('reduction', 'frequency'), 
+            subfolder)
+        mkdir(out)
+        df = reduction.adata.obs.copy()
+        if len(explode) > 0:
+            for cols in explode:
+                if type(cols)==str:
+                    cols = [cols]
+                df = tcr.explode_strs(df, cols, ';')
+        if sort_x:
+            props = df.groupby(x)[y].count().sort_values(ascending=False)
+            sort_order = list(props.index)
+            print(sort_order)
+            if xorder is not None:
+                xorder = [x for x in sort_order if x in xorder]
+            else:
+                xorder = sort_order
+        if sort_y:
+            props = df.groupby(y)[x].count().sort_values(ascending=False)
+            sort_order = props.index
+            if yorder is not None:
+                yorder = [y for y in sort_order if y in yorder]
+            else:
+                yorder = sort_order
+        freq.plots(reduction.adata, df, \
+            out, x=x, y=y, xrot=xrot, yrot=yrot, xorder=xorder, yorder=yorder, swap_axes=swap_axes, dropna=dropna, **kwargs)
+        freq.save_df(x, y, df, 'Frequency',out, dropna=dropna)
+        freq.save_df(x, y, df, 'Count',out, dropna=dropna)
+        return xorder, yorder
+
+### Infer CNV ###
+    def infercnv(self, reduction, ref_groups, annotation_key='Phenotype', 
+        sample_key='sample_name', 
+        gene_order_dir=None, use_name=True, write=True, 
+        cores=4, mem=32, partition='all', time=24):
+        import infercnv.pipeline as cnv
+
+        if gene_order_dir is None:
+            gene_order_dir = cnv.GENE_ORDER_DIR
+
+        out = reduction.out.replace('reduction', 'infercnv')
+        mkdir(out)
+        cnv.run_all_samples(reduction.adata, annotation_key, sample_key, ref_groups, \
+            self.reference, out=out, gene_order_dir=gene_order_dir, use_name=use_name, write=write, \
+            cores=cores, mem=mem, partition=partition, time=time)
+        return
+
+### 

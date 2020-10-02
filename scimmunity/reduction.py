@@ -2,12 +2,14 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import scanpy as sc
+import anndata
 
 from kneed import KneeLocator
 
-from scimmunity.plotting import plot_reps
+from scimmunity.plotting import plot_reps, plot_bool
 from scimmunity.clustering import plot_variance_ratio, plot_silhouette_coeff
 from scimmunity.utils import mkdir
+from scimmunity.annotation import plot_phenotype_markerset
 
 class scReduction():
 
@@ -47,7 +49,7 @@ class scReduction():
         self.subset = os.path.join(self.outdir, subset_name, subset_h5ad)
 
         self.subset_name = subset_name
-        self.subset_cond = dict()
+        self.subset_cond = subset_cond
         self.subfolder = subfolder
 
         # set output folders
@@ -61,7 +63,7 @@ class scReduction():
 
         if not os.path.isfile(self.subset):
             # create new subset if none exists
-            self.adata = create_subset(self)
+            self.adata = self.create_subset()
         else:
             # load existing subset adata
             self.adata = sc.read(self.subset)
@@ -76,6 +78,7 @@ class scReduction():
         self.n_jobs = n_jobs
         self.regress = regress
         self.regress_vars = regress_vars
+        self.default_rep = default_rep
         
         # define representations used for constructing neighborhood graph
         self.neighbors_reps = neighbors_reps
@@ -105,8 +108,9 @@ class scReduction():
         adata_parent = sc.read(self.parent)
         subset_inds = self.get_subset_inds(adata_parent)
         adata_parent.obs[self.subset_name] = subset_inds
-        if 'X_umap' in sadata_parent.obsm:
-            sc.pl.umap(adata_parent, color=subset_name, save='_'+subset_name)
+        if 'X_umap' in adata_parent.obsm:
+            sc.pl.umap(adata_parent, color=self.subset_name, 
+                save='_'+self.subset_name)
         return adata_parent[subset_inds]
 
     def verify_barcodes(self):
@@ -145,6 +149,13 @@ class scReduction():
         self.adata.layers['{}_regressed'.format(layer)] = adata.X
         return 
 
+    def run_regress(self):
+        for key in self.regress_vars:
+            if 'X_' + key in self.adata.obsm:
+                self.regress_rep(key, self.regress_vars[key], n_jobs=self.n_jobs)
+            elif key in self.adata.layers:
+                self.regress_layer(key, self.regress_vars[key], n_jobs=self.n_jobs)
+        return
     ### Dimension reduction ###
 
     def run_pca(self, n_comps=50):
@@ -246,13 +257,9 @@ class scReduction():
         if self.regress:
             for key in self.regress_vars:
                 if 'X_' + key in self.adata.obsm:
-                    self.regress_rep(key, regress_vars[key], n_jobs=self.n_jobs)
+                    self.regress_rep(key, self.regress_vars[key], n_jobs=self.n_jobs)
                 if key in self.adata.layers:
-                    self.regress_layer(key, regress_vars[key], n_jobs=self.n_jobs)
-            # self.regress_rep('latent', regress_vars['latent'], n_jobs=self.n_jobs)
-            # for layer in ['normalized', 'corrected']:
-            #     self.regress_layer(layer, regress_vars[layer], n_jobs=self.n_jobs)
-            #     self.regress_layer(layer, regress_vars[layer], n_jobs=self.n_jobs)
+                    self.regress_layer(key, self.regress_vars[key], n_jobs=self.n_jobs)
         if 'normalized_regressed' in self.adata.layers:
             self.adata.X = self.adata.layers['normalized_regressed']
         self.run_pca()
@@ -308,4 +315,18 @@ class scReduction():
         plot_reps(self.adata, obs, outdir=out, reps=reps, **kwargs)
         return
     
+    def plot_bool(self, obs, groups, reps=None, folder='reduction', **kwargs):
+        if reps is None:
+            reps=self.all_reps
+        for rep in reps:
+            out = os.path.join(self.outdir, self.subset_name, folder, rep)
+            plot_bool(self.adata, obs, rep, groups, out=out, **kwargs)        
+        return 
     
+    def plot_signature_dict(self, groupby, markersets, mode='heatmap', 
+        layers=['corrected_regressed', 'normalized_regressed']):
+        out = self.out.replace('reduction', 'heatmap')
+        mkdir(out)
+        plot_phenotype_markerset(self.adata, groupby, markersets, out=out, 
+            mode=mode, layers=layers)
+        return 
