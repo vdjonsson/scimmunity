@@ -4,6 +4,9 @@ import collections
 import numpy as np
 import pandas as pd
 
+import seaborn as sns
+import matplotlib.pyplot as plt
+
 from scimmunity.palette import detection as detection_colors
 from scimmunity.palette import expanded as expanded_colors
 from scimmunity.utils import reorder_obs, explode_str, explode_strs, clean_up_str
@@ -209,3 +212,96 @@ def expanded_tcr(adata, feature, thresh=10, normalize=False):
 
     reorder_obs(adata, clonal_col, [lesser, greatereq], expanded_colors)
     return clonal_col
+
+### Diversity Metrics ###
+def check_array(array):
+    if type(array) == pd.DataFrame:
+        array = array.values
+    elif type(array) == pd.Series:
+        array = array.values
+    return array
+
+def gini(array):
+    """Calculate the Gini coefficient of a numpy array."""
+    # from: https://github.com/oliviaguest/gini/blob/master/gini.py
+    # based on bottom eq:
+    # http://www.statsdirect.com/help/generatedimages/equations/equation154.svg
+    # from:
+    # http://www.statsdirect.com/help/default.htm#nonparametric_methods/gini.htm
+    # All values are treated equally, arrays must be 1d:
+    array = check_array(array)
+    array = array.flatten().astype(float)
+    if np.amin(array) < 0:
+        # Values cannot be negative:
+        array -= np.amin(array)
+    # Values cannot be 0:
+    array += 0.0000001
+    # Values must be sorted:
+    array = np.sort(array)
+    # Index per array element:
+    index = np.arange(1,array.shape[0]+1)
+    # Number of array elements:
+    n = array.shape[0]
+    # Gini coefficient:
+    return ((np.sum((2 * index - n  - 1) * array)) / (n * np.sum(array)))
+
+def _gini(df):
+    return pd.Series({'Gini Index':gini(df.values)})
+
+def richness(array):
+    array = check_array(array)
+    return len(array)
+
+def _richness(df):
+    return pd.Series({'Observed Richness': richness(df.values)})
+
+def simpson(array):
+    array = check_array(array)
+    p = array / array.sum()
+    return  1 - sum(p**2)
+
+def _simpson(df):
+    return pd.Series({"Simpson's Index of Diversity":simpson(df.values)})
+    
+def pielou(array):
+    array = check_array(array)
+    s = len(array)
+    p = array / array.sum()
+    h = -sum(p*np.log(p))
+    hmax = np.log(s)
+    return h/hmax
+
+def _pielou(df):
+    return  pd.Series({"Pielou's Evenness":pielou(df.values)})
+
+def dummy(array):
+    if type(array) == pd.DataFrame:
+        array = array.values
+    elif type(array) == pd.Series:
+        array = array.values
+    p = array / array.sum()
+    return sum(p)
+
+def diversity(adata, feature, groupby=[]):
+    df = count_tcr(adata, feature, groupby=groupby)
+    metrics = df.groupby(groupby).agg([gini, richness, simpson, pielou])
+    metrics.columns = metrics.columns.droplevel()
+    metrics = metrics.reset_index()
+    return metrics
+
+def diversity_barplot(adata, feature, x, hue, out='./', hue_order=None):
+    metrics = diversity(adata, feature, groupby=[x,hue])
+    old_metric_names = ['gini', 'richness', 'simpson', 'pielou']
+    metric_names = ['Gini index', 'Richness', "Simpson's Diversity Index", "Pielou's Evenness"]
+    rename = {old:new for old, new in zip(old_metric_names, metric_names)}
+    metrics = metrics.rename(columns=rename)
+    palette = {cat:color for cat, color in zip(adata.obs[hue].cat.categories, adata.uns[hue+'_colors'])}
+    for metric, old_metric in zip(metric_names, old_metric_names):
+        with sns.axes_style('ticks'):
+            plt.figure()
+            g = sns.barplot(x=x, y=metric, hue=hue, data=metrics, palette=palette, hue_order=hue_order)
+            g.legend_=None
+            sns.despine()
+            plt.tight_layout()
+            # plt.savefig('{}{}_{}_{}.png'.format(out, x, hue, old_metric))
+    return
